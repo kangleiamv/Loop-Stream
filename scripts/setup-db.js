@@ -15,12 +15,14 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS videos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT,
       filename TEXT NOT NULL,
       original_name TEXT NOT NULL,
       file_path TEXT NOT NULL,
       thumbnail_path TEXT,
       duration INTEGER,
       file_size INTEGER,
+      resolution TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);

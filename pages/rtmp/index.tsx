@@ -5,6 +5,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import Layout from '@/components/Layout';
 import Link from 'next/link';
+import { copyToClipboard as copyUniversal } from '@/lib/clipboard';
 
 export const getServerSideProps = async (context: GetServerSidePropsContext) => {
   const session = await getSession(context.req, context.res);
@@ -70,11 +71,19 @@ export default function RtmpReceiverPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(label);
-    toast.success(`${label} copied to clipboard!`);
-    setTimeout(() => setCopiedField(null), 2000);
+  const copyToClipboard = async (text: string, label: string) => {
+    if (!text) {
+      toast.error(`No ${label} available to copy`);
+      return;
+    }
+    const ok = await copyUniversal(text);
+    if (ok) {
+      setCopiedField(label);
+      toast.success(`${label} copied to clipboard!`);
+      setTimeout(() => setCopiedField(null), 2000);
+    } else {
+      toast.error(`Could not copy ${label} to clipboard automatically`);
+    }
   };
 
   const generateNewKey = async () => {

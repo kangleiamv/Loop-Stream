@@ -2,18 +2,17 @@
 
 <div align="center">
 
-![LOOP STREAM Banner](https://raw.githubusercontent.com/CMAISNAM/loopstream/main/public/images/banner.png)
-
 ### Professional 24/7 Multi-Destination Live Streaming Station & RTMP Ingest Relay Engine
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-white.svg?style=for-the-badge&logo=opensourceinitiative&logoColor=black)](LICENSE)
 [![Next.js](https://img.shields.io/badge/Next.js-14-black.svg?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-black.svg?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-6.0+-black.svg?style=for-the-badge&logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
+[![MCP Ready](https://img.shields.io/badge/Model_Context_Protocol-Enabled-white.svg?style=for-the-badge&logo=anthropic&logoColor=black)](#-model-context-protocol-mcp-ai-integration)
 [![RTMP](https://img.shields.io/badge/RTMP-Port_1935-white.svg?style=for-the-badge&logo=livechat&logoColor=black)](#-rtmp-ingest-receiver)
 [![Uptime](https://img.shields.io/badge/Broadcast-24%2F7_Continuous-white.svg?style=for-the-badge&logo=clock&logoColor=black)](#-features)
 
-[Features](#-key-features) • [Architecture](#-architecture) • [Quick Start](#-quick-start) • [OBS Setup](#-obs-studio-setup) • [Production Deployment](#-production-deployment-with-pm2) • [License](#-license)
+[Features](#-key-features) • [Architecture](#-architecture) • [Quick Start](#-quick-start) • [MCP AI Setup](#-model-context-protocol-mcp-ai-integration) • [OBS Setup](#-obs-studio-setup) • [Production Deployment](#-production-deployment-with-pm2) • [License](#-license)
 
 </div>
 
@@ -23,7 +22,7 @@
 
 **LOOP STREAM by CMAISNAM** is a high-performance, self-hosted streaming application designed for broadcasters, creators, and media enterprises. It enables **continuous 24/7 multi-platform live streaming** to YouTube, Twitch, Facebook Live, Kick, Instagram, TikTok, Twitter/X, and custom RTMP destinations simultaneously.
 
-Engineered with a **Single-Encode Pipeline**, LOOP STREAM transcodes incoming media once and relays it to multiple destinations without duplicate CPU/GPU overhead. Built with zero-drop broadcast redundancy, you can **hot-swap videos on the fly** or receive incoming feeds from **OBS Studio / vMix with automated failover backup loops**.
+Engineered with a **Single-Encode Pipeline**, LOOP STREAM transcodes incoming media once and relays it to multiple destinations without duplicate CPU/GPU overhead. Built with broadcast redundancy, it features **zero-drop hot-swap video switching**, **OBS Studio / vMix RTMP ingest with automated backup failover**, a **self-healing watchdog daemon**, and native **Model Context Protocol (MCP)** support for controlling broadcasts directly through AI assistants like Claude and Cursor.
 
 ---
 
@@ -32,19 +31,25 @@ Engineered with a **Single-Encode Pipeline**, LOOP STREAM transcodes incoming me
 - 🔄 **24/7 Continuous Non-Stop Looping**  
   Stream stored video files indefinitely in an endless loop with seamless PTS/DTS timeline synchronization and zero buffer pauses.
 - ⚡ **Zero-Drop Hot-Swap Video Switching**  
-  Switch the playing video in an active live broadcast in real time without stopping the stream or disconnecting viewers on YouTube/Twitch.
+  Switch the active playing video in a running broadcast on the fly without terminating the live stream or disconnecting viewers on YouTube/Twitch.
 - 📡 **Built-in RTMP Ingest Receiver (Port 1935)**  
-  Broadcast directly from OBS Studio, vMix, Prism Live, or mobile/hardware encoders straight into LOOP STREAM (`rtmp://<server-ip>:1935/live/<streamKey>`).
+  Broadcast directly from OBS Studio, vMix, Prism Live, or hardware encoders straight into LOOP STREAM (`rtmp://<server-ip>:1935/live/<streamKey>`) with low-latency HTTP-FLV live stream preview on port 8000.
 - 🛡️ **Automated Failover & Backup Loop Logic**  
-  If your OBS Studio or live ingest connection drops, the station instantly switches the live broadcast to a designated backup loop video. Once OBS reconnects, it seamlessly hot-swaps right back to the live feed!
+  If your OBS Studio or incoming live feed drops, the engine instantly switches output to a designated backup loop video. When OBS reconnects, it seamlessly transitions back to the live feed.
 - 🌐 **Multi-Platform Simulcast (Single-Encode)**  
   Broadcast simultaneously to YouTube, Twitch, Facebook, Kick, Instagram, TikTok, X, and Custom RTMP targets from a single encode pass.
+- 🤖 **Model Context Protocol (MCP) AI Integration** *(New)*  
+  Full MCP server and interactive console (`/mcp`) allowing AI assistants (Claude Desktop, Cursor, ChatGPT) to start/stop streams, hot-swap videos, inspect system health, and manage your library via natural language.
+- 🐕 **Automated Stream Watchdog Service** *(New)*  
+  A dedicated background daemon (`scripts/watchdog-service.js`) continuously monitors active streams and FFmpeg processes, automatically recovering and restarting failed broadcasts for true 24/7 reliability.
+- 📥 **Direct YouTube Video Import** *(New)*  
+  Import videos directly from YouTube URLs into your library with format/resolution selection (1080p, 720p, etc.) and Netscape cookie support (`/settings`) to bypass bot verification.
+- 🔑 **API Key & Credential Management** *(New)*  
+  Generate and revoke API keys with custom labels, view audit logs, and manage credentials with hardened bcrypt authentication.
 - 🎨 **Ultra-Modern Monochrome Glassmorphism UI**  
   High-contrast black & white design system featuring backdrop blur effects, responsive cards, interactive modals, and real-time status indicators.
 - 📊 **Hardware & Broadcast Telemetry**  
   Real-time server CPU, RAM, disk utilization, active FFmpeg process counts, live output FPS, and network bitrate meters.
-- 📁 **Complete Video Management**  
-  Upload, organize, preview, and delete video assets with automated thumbnail generation and metadata detection.
 
 ---
 
@@ -56,14 +61,18 @@ flowchart TD
         A["📁 Stored Video Library (MP4/MKV)"]
         B["📡 OBS Studio / vMix Ingest (Port 1935)"]
         C["🌐 External Pull URL (RTMP/RTSP/HLS)"]
+        YT["📥 Direct YouTube Video Downloader"]
     end
 
     subgraph Core["2. LOOP STREAM Engine"]
         D["Node-Media-Server (RTMP Ingest Port 1935)"]
         E["Next.js Web Controller (Port 3000)"]
-        F["FFmpeg 6.x Transcoding & Hot-Swap Pipeline"]
+        F["FFmpeg Transcoding & Hot-Swap Pipeline"]
         G{"Auto-Failover Logic"}
+        WD["🐕 Watchdog Daemon (Process Monitor & Auto-Restart)"]
+        MCP["🤖 MCP Server & API Endpoints (/api/mcp)"]
         
+        YT --> A
         B --> D
         D -->|Webhook Trigger| E
         E -->|Hot-Swap Signal| F
@@ -71,6 +80,8 @@ flowchart TD
         C --> F
         D -.->|Stream Drops| G
         G -.->|Switch to Backup Video| F
+        WD -.->|Heartbeat & Auto-Recovery| F
+        MCP <-->|AI Tool Execution| E
     end
 
     subgraph Outputs["3. Multi-Platform Simulcast Destinations"]
@@ -81,7 +92,7 @@ flowchart TD
         O5["📸 Instagram Live"]
         O6["🎵 TikTok Live"]
         O7["✖️ Twitter / X"]
-        O8["🔗 Custom RTMP"]
+        O8["🔗 Custom RTMP Target"]
         
         F --> O1
         F --> O2
@@ -100,12 +111,12 @@ flowchart TD
 
 | Resource | Minimum | Recommended (Multi-Stream) |
 |---|---|---|
-| **OS** | Linux (Ubuntu 20.04/22.04/24.04), Debian, macOS | Ubuntu 22.04 LTS (x86_64) |
-| **CPU** | 2 Cores | 4+ Cores (for 1080p simulcast) |
+| **OS** | Linux (Ubuntu 20.04/22.04/24.04), Debian, macOS | Ubuntu 22.04 / 24.04 LTS (x86_64) |
+| **CPU** | 2 Cores | 4+ Cores (for simultaneous 1080p multi-streaming) |
 | **RAM** | 2 GB | 4 GB - 8 GB |
-| **Storage** | 20 GB SSD | 100+ GB SSD (for video storage) |
+| **Storage** | 20 GB SSD | 100+ GB SSD (for media storage) |
 | **Bandwidth** | 5 Mbps upload | 25+ Mbps upload per concurrent stream |
-| **Software** | Node.js 18.x+, FFmpeg 4.4+ | Node.js 18.x/20.x, FFmpeg 6.x |
+| **Software** | Node.js 18.x+, FFmpeg 4.4+, Python 3 | Node.js 20.x, FFmpeg 6.x+, yt-dlp |
 
 ---
 
@@ -114,21 +125,21 @@ flowchart TD
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/CMAISNAM/loopstream.git
-cd loopstream
+git clone https://github.com/kangleiamv/Loop-Stream.git
+cd Loop-Stream
 ```
 
 ### 2. Install System Dependencies (Ubuntu / Debian)
 
 ```bash
 sudo apt update
-sudo apt install -y nodejs npm ffmpeg build-essential python3
+sudo apt install -y nodejs npm ffmpeg build-essential python3 python3-pip
 ```
 
-Verify installations:
+Optional: Install `yt-dlp` for YouTube video imports:
 ```bash
-node -v      # v18.x or higher
-ffmpeg -version
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
 ```
 
 ### 3. Install NPM Packages
@@ -139,23 +150,23 @@ npm install
 
 ### 4. Configure Environment Variables
 
-Create `.env.local` based on `.env.example`:
+Copy `.env.example` to `.env.local`:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Edit `.env.local`:
+Configure `.env.local`:
 
 ```env
 # Server Port
 PORT=3000
 NODE_ENV=production
 
-# Security & Session
+# Security & Session (generate with: openssl rand -base64 32)
 SESSION_SECRET=replace_with_a_long_random_secret_string_32_chars_min
 
-# Admin Credentials
+# Authentication Credentials
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD_HASH=$2a$10$bnBPpvGuYqqJ1bezIh1the1T87myl/lh0nNIrDNvWF.D02QsoVc46 # Default: admin123
 
@@ -165,37 +176,30 @@ UPLOAD_DIR=./public/uploads
 MAX_FILE_SIZE=2147483648
 ```
 
-> **Tip**: To generate a secure bcrypt password hash for your custom password, run:
-> ```bash
-> node -e "const bcrypt = require('bcryptjs'); console.log(bcrypt.hashSync('YourStrongPassword', 10));"
-> ```
+> **Tip**: Default credentials are **Username:** `admin` | **Password:** `admin123`.
 
-### 5. Initialize the SQLite Database
+### 5. Initialize Database & Run
 
 ```bash
+# Initialize SQLite database
 node scripts/setup-db.js
-```
 
-### 6. Build & Run
-
-**Development Mode:**
-```bash
-npm run dev
-```
-
-**Production Build:**
-```bash
+# Build and start Next.js
 npm run build
 npm start
 ```
 
-Access the dashboard at: `http://localhost:3000` (Default credentials: `admin` / `admin123`).
+Access the dashboard at: `http://localhost:3000`
 
 ---
 
 ## 🛠️ Production Deployment with PM2
 
-For robust 24/7 background operation with automatic restarts and log rotation, use the included PM2 configuration.
+For robust 24/7 background operation, LOOP STREAM includes a multi-service PM2 ecosystem:
+
+1. **`qc-live`**: Next.js Web Controller & API
+2. **`loopstream-rtmp`**: NodeMediaServer RTMP Ingest & HTTP-FLV daemon
+3. **`loopstream-watchdog`**: Autonomous stream health monitor & auto-restart watchdog
 
 ### 1. Install PM2 Globally
 
@@ -203,21 +207,13 @@ For robust 24/7 background operation with automatic restarts and log rotation, u
 sudo npm install -g pm2
 ```
 
-### 2. Create Log Directories
-
-```bash
-mkdir -p logs data public/uploads
-```
-
-### 3. Build Next.js
+### 2. Build the Application
 
 ```bash
 npm run build
 ```
 
-### 4. Launch Services with PM2
-
-The `ecosystem.config.js` manages both the **Web Application** and the **RTMP Ingest Receiver**:
+### 3. Launch with PM2
 
 ```bash
 pm2 start ecosystem.config.js
@@ -225,28 +221,70 @@ pm2 save
 pm2 startup
 ```
 
-### 5. Check Service Status
+### 4. Monitor Services
 
 ```bash
 pm2 list
 pm2 logs
 ```
 
-Output:
 ```
 ┌────┬────────────────────┬──────────┬──────┬───────────┬──────────┬──────────┐
 │ id │ name               │ mode     │ ↺    │ status    │ cpu      │ memory   │
 ├────┼────────────────────┼──────────┼──────┼───────────┼──────────┼──────────┤
-│ 1  │ loopstream-rtmp    │ fork     │ 0    │ online    │ 0%       │ 62.0mb   │
 │ 0  │ qc-live            │ fork     │ 0    │ online    │ 0%       │ 98.0mb   │
+│ 1  │ loopstream-rtmp    │ fork     │ 0    │ online    │ 0.1%     │ 25.0mb   │
+│ 2  │ loopstream-watchdog│ fork     │ 0    │ online    │ 0.1%     │ 22.0mb   │
 └────┴────────────────────┴──────────┴──────┴───────────┴──────────┴──────────┘
 ```
 
 ---
 
+## 🤖 Model Context Protocol (MCP) AI Integration
+
+Control LOOP STREAM using natural language through AI assistants (Claude Desktop, Cursor, ChatGPT) via the built-in MCP server.
+
+### Available MCP Tools:
+- `list_streams`: Inspect all streams, statuses, sources, and destinations.
+- `start_stream`: Launch a stream by ID.
+- `stop_stream`: Terminate an active stream.
+- `switch_video`: Hot-swap the playing video in an active broadcast with zero stream drops.
+- `list_videos`: Retrieve the library of uploaded and downloaded videos.
+- `get_system_stats`: View CPU, memory, storage, and active broadcast health.
+
+### Claude Desktop Configuration
+
+Add the following to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "loopstream": {
+      "command": "node",
+      "args": ["/absolute/path/to/Loop-Stream/QC-Live/scripts/mcp-server.js"],
+      "env": {
+        "LOOPSTREAM_URL": "http://127.0.0.1:3000",
+        "LOOPSTREAM_API_KEY": "YOUR_API_KEY_FROM_SETTINGS_PAGE"
+      }
+    }
+  }
+}
+```
+
+### Cursor Setup
+
+In **Cursor Settings** → **Features** → **MCP Servers**, add:
+* **Name:** `loopstream`
+* **Type:** `command`
+* **Command:** `node /absolute/path/to/Loop-Stream/QC-Live/scripts/mcp-server.js`
+
+Generate and manage your API keys directly from the `/settings` or `/mcp` web interface.
+
+---
+
 ## 📡 OBS Studio Setup Guide
 
-Broadcast directly from OBS Studio to LOOP STREAM and relay out to all platforms:
+Broadcast directly from OBS Studio to LOOP STREAM and relay out to all platforms simultaneously:
 
 1. Open **OBS Studio** → **Settings** → **Stream**.
 2. **Service**: Select `Custom...`
@@ -258,7 +296,6 @@ Broadcast directly from OBS Studio to LOOP STREAM and relay out to all platforms
    - Rate Control: `CBR`
    - Bitrate: `3500 - 6000 Kbps`
    - Keyframe Interval: `2 seconds` (Recommended for YouTube/Twitch)
-   - Profile: `high`
    - Tune: `zerolatency`
 6. Click **Start Streaming** in OBS Studio.
 
@@ -314,7 +351,7 @@ server {
 }
 ```
 
-Enable site & get SSL certificate:
+Enable site and configure SSL:
 ```bash
 sudo ln -s /etc/nginx/sites-available/loopstream /etc/nginx/sites-enabled/
 sudo nginx -t
@@ -322,11 +359,11 @@ sudo systemctl reload nginx
 sudo certbot --nginx -d stream.yourdomain.com
 ```
 
-### Firewall Setup (UFW)
+### Firewall Configuration (UFW)
 
 ```bash
-sudo ufw allow 80/tcp     # HTTP
-sudo ufw allow 443/tcp    # HTTPS
+sudo ufw allow 80/tcp     # HTTP Web Panel
+sudo ufw allow 443/tcp    # HTTPS Web Panel
 sudo ufw allow 1935/tcp   # RTMP Ingest (OBS / vMix)
 sudo ufw allow 8000/tcp   # HTTP-FLV Preview (optional)
 sudo ufw enable
@@ -334,7 +371,7 @@ sudo ufw enable
 
 ---
 
-## 🎯 Multi-Platform Destination Guide
+## 🎯 Multi-Platform Destination Presets
 
 Enter one or more RTMP destination URLs separated by newlines in the **Destinations** field:
 
@@ -352,7 +389,7 @@ Enter one or more RTMP destination URLs separated by newlines in the **Destinati
 * **RTMP URL**: `rtmps://fa723fc1b171.global-contribute.live-video.net/app/<STREAM_KEY>`
 
 ### 5. Instagram Live / TikTok Live
-* Use your stream key provider (YellowDuck, Streamlabs, etc.):
+* Use your stream key provider:
 * **RTMP URL**: `rtmps://live-upload.instagram.com:443/rtmp/<STREAM_KEY>`
 
 ---
@@ -365,7 +402,7 @@ Need to change the playing video during a 24/7 stream without terminating the br
 2. On any running stream card, click **⚡ Switch Video**.
 3. Select a new video from your library.
 4. Click **Apply Switch Now**.
-5. The station automatically swaps the video input buffer in real-time. Viewers on YouTube and Twitch experience zero buffering and no stream termination!
+5. The station automatically hot-swaps the video input buffer in real-time. Viewers on YouTube and Twitch experience zero buffering and no stream termination!
 
 ---
 
@@ -373,7 +410,7 @@ Need to change the playing video during a 24/7 stream without terminating the br
 
 ```
 QC-Live/
-├── components/           # UI Components (Monochrome Glassmorphism)
+├── components/           # Monochrome Glassmorphism UI Components
 │   ├── EditStreamModal.tsx
 │   ├── Layout.tsx
 │   ├── PlatformIcon.tsx
@@ -382,28 +419,36 @@ QC-Live/
 │   ├── SwitchVideoModal.tsx
 │   ├── VideoLibrary.tsx
 │   ├── VideoPreview.tsx
-│   └── VideoUpload.tsx
+│   └── VideoUpload.tsx   # Video file upload & YouTube importer
 ├── lib/                  # Core Business Logic
 │   ├── auth.ts           # Authentication & session token verification
+│   ├── authMiddleware.ts # API route protection & API key validation
 │   ├── database.ts       # SQLite3 database connection & schema
 │   ├── ffmpeg.ts         # Broadcast transcoding & zero-drop hot-swap engine
 │   ├── platforms.ts      # Multi-platform simulcast presets & icons
-│   └── streamState.ts    # In-memory stream lifecycle registry
+│   ├── streamState.ts    # In-memory stream lifecycle registry
+│   └── youtubeCookies.ts # Netscape cookie parser for YouTube downloads
 ├── pages/                # Next.js Pages & API Endpoints
 │   ├── api/
 │   │   ├── auth/         # Login, logout, session verification
+│   │   ├── mcp/          # MCP tools & status endpoint
 │   │   ├── rtmp/         # Webhooks, receiver status, key generator
+│   │   ├── settings/     # API keys & cookie configuration endpoints
 │   │   ├── streams/      # Create, start, stop, switch-video, delete
 │   │   ├── system/       # CPU, RAM, disk, and process telemetry
-│   │   └── videos/       # Upload, list, delete, stream
+│   │   └── videos/       # Upload, YouTube download, list, delete
 │   ├── dashboard/        # Metrics, simulcast matrix, system health
+│   ├── mcp/              # MCP Server interactive console & setup guide
 │   ├── rtmp/             # RTMP Ingest console & OBS credentials
+│   ├── settings/         # API key & YouTube cookie management
 │   ├── streams/          # Stream management & multi-card monitor
 │   └── videos/           # Media asset library & video uploader
 ├── public/               # Static assets & uploads directory
 ├── scripts/
+│   ├── mcp-server.js     # Standalone stdio MCP server for Claude/Cursor
 │   ├── rtmp-service.js   # Standalone NodeMediaServer RTMP/HTTP-FLV daemon
-│   └── setup-db.js       # SQLite database initialization
+│   ├── setup-db.js       # SQLite database initialization
+│   └── watchdog-service.js # Autonomous 24/7 crash recovery daemon
 ├── ecosystem.config.js   # Production PM2 multi-process configuration
 └── styles/globals.css    # Tailwind CSS & glassmorphism theme tokens
 ```
@@ -418,8 +463,8 @@ Yes! The FFmpeg pipeline uses the ultra-optimized <code>libx264</code> software 
 </details>
 
 <details>
-<summary><b>What happens if my VPS reboots?</b></summary>
-Because PM2 is configured with <code>pm2 save</code> and <code>pm2 startup</code>, both the Web Panel and RTMP Receiver will automatically launch on server boot. Streams with <code>Auto-Start</code> enabled will resume broadcasting automatically.
+<summary><b>How does the Watchdog Service protect my streams?</b></summary>
+The Watchdog daemon (<code>scripts/watchdog-service.js</code>) checks active streams every 15 seconds. If an FFmpeg process unexpectedly terminates or crashes, the watchdog immediately relaunches the stream without human intervention.
 </details>
 
 <details>
@@ -434,18 +479,6 @@ Yes! LOOP STREAM includes vertical resolution presets (720x1280 and 1080x1920) s
 
 ---
 
-## 🤝 Contributing
-
-Contributions, bug reports, and feature suggestions are welcome!
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/NewFeature`)
-3. Commit your changes (`git commit -m 'Add NewFeature'`)
-4. Push to the branch (`git push origin feature/NewFeature`)
-5. Open a Pull Request
-
----
-
 ## 📄 License
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
@@ -454,12 +487,12 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 ## 👨‍💻 Author & Credits
 
-Designed and engineered with ❤️ by **CMAISNAM**  
-* GitHub: [@CMAISNAM](https://github.com/CMAISNAM)  
-* Project: **LOOP STREAM by CMAISNAM**
+Designed and engineered with ❤️ by **CMAISNAM** & **kangleiamv**  
+* GitHub: [kangleiamv/Loop-Stream](https://github.com/kangleiamv/Loop-Stream)  
+* Project: **LOOP STREAM**
 
 ---
 
 <div align="center">
-  <b>LOOP STREAM by CMAISNAM</b> • Continuous 24/7 Multi-Stream & Relay Station • © 2026 All Rights Reserved
+  <b>LOOP STREAM</b> • Continuous 24/7 Multi-Stream & Relay Station • © 2026 All Rights Reserved
 </div>

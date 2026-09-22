@@ -26,6 +26,8 @@ export default function Layout({ children }: LayoutProps) {
     { href: '/streams', label: 'Streams' },
     { href: '/videos', label: 'Videos' },
     { href: '/rtmp', label: 'RTMP Ingest' },
+    { href: '/mcp', label: 'AI & MCP' },
+    { href: '/settings', label: 'Settings' },
   ];
 
   return (

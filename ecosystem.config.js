@@ -37,5 +37,21 @@ module.exports = {
     out_file: './logs/rtmp-out.log',
     log_file: './logs/rtmp-combined.log',
     time: true
+  },
+  {
+    name: 'loopstream-watchdog',
+    script: 'scripts/watchdog-service.js',
+    cwd: '/home/ubuntu/loopstream/QC-Live',
+    env: {
+      NODE_ENV: 'production',
+      NEXT_API_BASE: 'http://127.0.0.1:3000',
+      DATABASE_PATH: './data/streams.db',
+      LOOPSTREAM_INTERNAL_KEY: 'loopstream-internal-mcp-key'
+    },
+    max_memory_restart: '300M',
+    error_file: './logs/watchdog-err.log',
+    out_file: './logs/watchdog-out.log',
+    log_file: './logs/watchdog-combined.log',
+    time: true
   }]
 };
