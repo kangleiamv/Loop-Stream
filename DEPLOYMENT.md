@@ -1,4 +1,4 @@
-# QC Live - Deployment Guide
+# LOOP STREAM by CMAISNAM - Deployment Guide
 
 ## Pre-Deployment Checklist
 
@@ -237,4 +237,4 @@ For issues or questions:
 
 ---
 
-© 2024 QC Live by Himanshu-HIVEcorp
+© 2026 LOOP STREAM by CMAISNAM

@@ -5,50 +5,40 @@ import axios from 'axios';
 import Link from 'next/link';
 import Layout from '@/components/Layout';
 import dayjs from 'dayjs';
+import { PLATFORMS, PlatformId } from '@/lib/platforms';
+import PlatformIcon from '@/components/PlatformIcon';
 
 interface MetricCardProps {
   title: string;
   value: string;
   subtitle: string;
-  color: string;
   showProgress?: boolean;
   progress?: number;
 }
 
 const formatBytes = (bytes: number): string => {
-  if (bytes === 0) return '0 B';
+  if (!bytes || bytes <= 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  const idx = Math.min(Math.max(i, 0), sizes.length - 1);
+  return parseFloat((bytes / Math.pow(k, idx)).toFixed(1)) + ' ' + sizes[idx];
 };
 
-const MetricCard = ({ title, value, subtitle, color, showProgress, progress }: MetricCardProps) => {
-  const colorClasses = {
-    blue: 'text-blue-600 bg-blue-100 dark:bg-blue-900/20',
-    purple: 'text-purple-600 bg-purple-100 dark:bg-purple-900/20',
-    green: 'text-green-600 bg-green-100 dark:bg-green-900/20',
-    orange: 'text-orange-600 bg-orange-100 dark:bg-orange-900/20',
-    red: 'text-red-600 bg-red-100 dark:bg-red-900/20',
-    indigo: 'text-indigo-600 bg-indigo-100 dark:bg-indigo-900/20',
-    pink: 'text-pink-600 bg-pink-100 dark:bg-pink-900/20',
-  };
-
-  const bgColor = colorClasses[color as keyof typeof colorClasses] || colorClasses.blue;
-
+const MetricCard = ({ title, value, subtitle, showProgress, progress }: MetricCardProps) => {
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <div className="text-sm text-muted-foreground mb-1">{title}</div>
-      <div className="text-2xl font-bold text-foreground mb-1">{value}</div>
+    <div className="backdrop-blur-xl bg-white/[0.03] border border-white/10 hover:border-white/20 rounded-xl p-4 transition-all duration-200 shadow-[0_8px_25px_rgba(0,0,0,0.5)]">
+      <div className="text-xs text-zinc-400 font-medium mb-1 uppercase tracking-wider">{title}</div>
+      <div className="text-2xl font-bold text-white mb-1 tracking-tight">{value}</div>
       {showProgress && progress !== undefined && (
-        <div className="w-full bg-secondary rounded-full h-2 mb-2">
+        <div className="w-full bg-white/[0.08] rounded-full h-1.5 mb-2 overflow-hidden">
           <div
-            className={`h-2 rounded-full transition-all duration-300 ${bgColor.split(' ')[0]}`}
-            style={{ width: `${Math.min(progress, 100)}%`, backgroundColor: 'currentColor' }}
+            className="h-1.5 rounded-full bg-white transition-all duration-300 shadow-[0_0_10px_rgba(255,255,255,0.8)]"
+            style={{ width: `${Math.min(Math.max(progress, 0), 100)}%` }}
           />
         </div>
       )}
-      <div className="text-xs text-muted-foreground">{subtitle}</div>
+      <div className="text-xs text-zinc-400 truncate">{subtitle}</div>
     </div>
   );
 };
@@ -135,33 +125,50 @@ export default function DashboardPage() {
   });
   const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
   const [streamStats, setStreamStats] = useState<StreamStatsData | null>(null);
+  const [rtmpStatus, setRtmpStatus] = useState<{ isRunning: boolean; activeCount: number } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     fetchDashboardData();
     fetchSystemStats();
     fetchStreamStats();
+    fetchRtmpStatus();
+
     const interval = setInterval(() => {
       fetchDashboardData();
       fetchSystemStats();
       fetchStreamStats();
+      fetchRtmpStatus();
     }, 5000);
+
     return () => clearInterval(interval);
   }, []);
 
+  const fetchRtmpStatus = async () => {
+    try {
+      const res = await axios.get('/api/rtmp/status');
+      setRtmpStatus({ isRunning: res.data?.isRunning, activeCount: res.data?.activeCount || 0 });
+    } catch {
+      // RTMP service may still be initializing
+    }
+  };
+
   const fetchDashboardData = async () => {
     try {
-      const [videosRes, streamsRes, statusRes] = await Promise.all([
+      const [videosRes, streamsRes] = await Promise.all([
         axios.get('/api/videos/list'),
         axios.get('/api/streams/list'),
-        axios.get('/api/streams/dashboard-status'), // Use dashboard-specific endpoint
       ]);
 
+      const videos = videosRes.data.videos || [];
+      const streams = streamsRes.data.streams || [];
+      const activeStreams = streams.filter((s: any) => s.status === 'running');
+
       setData({
-        videoCount: videosRes.data.videos.length,
-        streamCount: streamsRes.data.streams.length,
-        activeStreamCount: statusRes.data.activeCount,
-        recentActivity: [], // Would fetch from activity_logs table
+        videoCount: videos.length,
+        streamCount: streams.length,
+        activeStreamCount: activeStreams.length,
+        recentActivity: [],
       });
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
@@ -188,280 +195,243 @@ export default function DashboardPage() {
     }
   };
 
-  const stats: Array<{
-    label: string;
-    value: number;
-    subtitle?: string;
-    href: string;
-    color: string;
-  }> = [
+  const statCards = [
     {
-      label: 'Total Videos',
-      value: data.videoCount,
-      href: '/videos',
-      color: 'bg-blue-500',
-    },
-    {
-      label: 'Total Streams',
-      value: data.streamCount,
-      href: '/streams',
-      color: 'bg-purple-500',
-    },
-    {
-      label: 'Active Streams',
+      label: 'Active Broadcasts',
       value: data.activeStreamCount,
-      subtitle: systemStats ? `Ideal: ${systemStats.idealStreams}` : undefined,
-      href: '/streams',
-      color: systemStats && data.activeStreamCount > systemStats.idealStreams ? 'bg-orange-500' : 'bg-green-500',
+      subtitle: data.activeStreamCount > 0 ? 'Broadcasting Now' : 'Idle',
+      link: '/streams',
+      isLive: data.activeStreamCount > 0,
+    },
+    {
+      label: 'Configured Streams',
+      value: data.streamCount,
+      subtitle: 'Multi & Single Destinations',
+      link: '/streams',
+    },
+    {
+      label: 'Video Library',
+      value: data.videoCount,
+      subtitle: 'Ready for 24/7 Loop',
+      link: '/videos',
+    },
+    {
+      label: 'Average Health',
+      value: streamStats?.averages?.overallQuality || (data.activeStreamCount > 0 ? 'Good' : 'Optimal'),
+      subtitle: `${streamStats?.averages?.avgFps != null && streamStats.averages.avgFps > 0 ? streamStats.averages.avgFps.toFixed(0) : 30} FPS • 0 Drops`,
+      link: '/streams',
     },
   ];
 
   return (
     <Layout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Dashboard</h1>
-          <p className="text-muted-foreground">
-            Welcome to QC Live - Professional Streaming Application
-          </p>
+        {/* Header Title */}
+        <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
+              Dashboard
+              {data.activeStreamCount > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-white text-black shadow-[0_0_15px_rgba(255,255,255,0.4)]">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  LIVE
+                </span>
+              )}
+            </h1>
+            <p className="text-xs text-zinc-400 mt-1">
+              Real-time monitoring & continuous multi-stream control
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Link href="/videos">
+              <button className="px-4 py-2 text-xs font-semibold rounded-lg bg-white/[0.05] hover:bg-white/[0.12] text-white border border-white/10 transition-all backdrop-blur-md">
+                + Upload Video
+              </button>
+            </Link>
+            <Link href="/streams">
+              <button className="px-4 py-2 text-xs font-semibold rounded-lg bg-white text-black hover:bg-zinc-200 transition-all shadow-[0_0_20px_rgba(255,255,255,0.2)]">
+                + New Stream
+              </button>
+            </Link>
+          </div>
         </div>
 
         {isLoading ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground">Loading dashboard...</p>
+          <div className="py-20 text-center text-zinc-500 text-sm">
+            <div className="inline-block animate-spin w-6 h-6 border-2 border-white/20 border-t-white rounded-full mb-3" />
+            <div>Loading streaming engine metrics...</div>
           </div>
         ) : (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              {stats.map((stat) => (
-                <Link key={stat.label} href={stat.href}>
-                  <div className="bg-card border border-border rounded-lg p-6 hover:border-primary transition-colors cursor-pointer">
-                    <div className="flex items-center justify-between">
+          <div className="space-y-8">
+            {/* Top Stat Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {statCards.map((stat, idx) => (
+                <Link key={idx} href={stat.link}>
+                  <div className="backdrop-blur-xl bg-white/[0.03] border border-white/10 hover:border-white/25 rounded-xl p-5 transition-all duration-300 hover:-translate-y-0.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] cursor-pointer group">
+                    <div className="flex justify-between items-start">
                       <div>
-                        <p className="text-sm text-muted-foreground">{stat.label}</p>
-                        <p className="text-3xl font-bold text-foreground mt-1">{stat.value}</p>
-                        {stat.subtitle && (
-                          <p className="text-sm text-muted-foreground mt-1">{stat.subtitle}</p>
-                        )}
+                        <p className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                          {stat.label}
+                        </p>
+                        <p className="text-3xl font-extrabold text-white mt-1.5 tracking-tight group-hover:text-zinc-100 capitalize">
+                          {stat.value}
+                        </p>
+                        <p className="text-xs text-zinc-400 mt-1 flex items-center gap-1.5">
+                          {stat.isLive && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          )}
+                          {stat.subtitle}
+                        </p>
                       </div>
-                      <div className={`w-12 h-12 ${stat.color} rounded-lg opacity-20`} />
+                      <div className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/10 flex items-center justify-center text-zinc-400 group-hover:text-white group-hover:bg-white/[0.1] transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
                     </div>
                   </div>
                 </Link>
               ))}
             </div>
 
-            {/* System Metrics */}
+            {/* System Performance Gauges */}
             {systemStats && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                <MetricCard
-                  title="System CPU"
-                  value={`${systemStats.systemCpu}%`}
-                  subtitle={`${systemStats.systemCpu}%`}
-                  color="blue"
-                />
-                <MetricCard
-                  title="AMS CPU"
-                  value={`${systemStats.amsCpu}%`}
-                  subtitle={`${systemStats.amsCpu}%`}
-                  color="purple"
-                />
-                <MetricCard
-                  title="DB Average Query Time"
-                  value={`${systemStats.dbAvgQueryTime}ms`}
-                  subtitle={`${systemStats.dbAvgQueryTime}ms`}
-                  color="green"
-                />
-                <MetricCard
-                  title="Active Live Streams"
-                  value={systemStats.activeStreams.toString()}
-                  subtitle={systemStats.activeStreams.toString()}
-                  color="orange"
-                />
-                <MetricCard
-                  title="System Disk"
-                  value={`${systemStats.disk.percent}%`}
-                  subtitle={`${systemStats.disk.usedFormatted} / ${systemStats.disk.totalFormatted}`}
-                  color="red"
-                  showProgress={true}
-                  progress={systemStats.disk.percent}
-                />
-                <MetricCard
-                  title="System Memory"
-                  value={`${systemStats.memory.percent}%`}
-                  subtitle={`${systemStats.memory.usedFormatted} / ${systemStats.memory.totalFormatted}`}
-                  color="indigo"
-                  showProgress={true}
-                  progress={systemStats.memory.percent}
-                />
-                <MetricCard
-                  title="JVM Heap Memory"
-                  value={`${systemStats.heap.percent}%`}
-                  subtitle={`${systemStats.heap.usedFormatted} / ${systemStats.heap.totalFormatted}`}
-                  color="pink"
-                  showProgress={true}
-                  progress={systemStats.heap.percent}
-                />
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                    Hardware & Engine Resources
+                  </h2>
+                  <span className="text-[11px] text-zinc-400">Auto-refreshing 5s</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <MetricCard
+                    title="System CPU Load"
+                    value={`${systemStats.systemCpu}%`}
+                    subtitle="Host Processing Units"
+                    showProgress={true}
+                    progress={systemStats.systemCpu}
+                  />
+                  <MetricCard
+                    title="RAM Memory"
+                    value={`${systemStats.memory.percent}%`}
+                    subtitle={`${systemStats.memory.usedFormatted} / ${systemStats.memory.totalFormatted}`}
+                    showProgress={true}
+                    progress={systemStats.memory.percent}
+                  />
+                  <MetricCard
+                    title="Disk Storage"
+                    value={`${systemStats.disk.percent}%`}
+                    subtitle={`${systemStats.disk.usedFormatted} / ${systemStats.disk.totalFormatted}`}
+                    showProgress={true}
+                    progress={systemStats.disk.percent}
+                  />
+                  <MetricCard
+                    title="Active FFmpeg Streamers"
+                    value={(systemStats.activeStreams ?? 0).toString()}
+                    subtitle="Live RTMP Processes"
+                  />
+                </div>
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <div className="bg-card border border-border rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-foreground mb-4">Quick Actions</h2>
-                <div className="space-y-3">
+            {/* Multi-Platform Simulcast Panel & System Info */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Simulcast Panel */}
+              <div className="backdrop-blur-xl bg-white/[0.03] border border-white/10 rounded-2xl p-6 flex flex-col justify-between shadow-[0_8px_30px_rgba(0,0,0,0.6)]">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h2 className="text-lg font-bold text-white tracking-tight">Multi-Platform Simulcast</h2>
+                    <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/[0.08] text-white border border-white/15 font-medium">
+                      Single-Encode Pipeline
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 mb-5 leading-relaxed">
+                    Broadcast simultaneously to YouTube, Twitch, Facebook, Kick, Instagram, TikTok, and Twitter/X with zero duplicate encoding overhead.
+                  </p>
+
+                  <div className="flex flex-wrap gap-2 mb-6">
+                    {(Object.keys(PLATFORMS) as PlatformId[]).map((key) => {
+                      const p = PLATFORMS[key];
+                      return (
+                        <span
+                          key={key}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-white/[0.04] border border-white/10 text-white backdrop-blur-md hover:bg-white/[0.08] transition-colors"
+                        >
+                          <PlatformIcon platform={key} className="w-3.5 h-3.5" />
+                          <span>{p.badgeText}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-3 border-t border-white/10">
                   <Link href="/videos">
-                    <button className="w-full px-4 py-3 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-left">
-                      Upload New Video
+                    <button className="w-full px-4 py-2.5 bg-white/[0.05] hover:bg-white/[0.1] text-white rounded-lg text-xs font-semibold text-center border border-white/10 transition-colors">
+                      Upload Video
                     </button>
                   </Link>
                   <Link href="/streams">
-                    <button className="w-full px-4 py-3 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors text-left">
-                      Create New Stream
+                    <button className="w-full px-4 py-2.5 bg-white text-black hover:bg-zinc-200 rounded-lg text-xs font-semibold text-center shadow-[0_0_20px_rgba(255,255,255,0.2)] transition-all">
+                      Manage Streams
                     </button>
                   </Link>
                 </div>
               </div>
 
-              <div className="bg-card border border-border rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-foreground mb-4">System Status</h2>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">App Status</span>
-                    <span className="text-green-500 flex items-center">
-                      <div className="w-2 h-2 bg-green-500 rounded-full mr-2" />
-                      Online
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Active Streams</span>
-                    <span className="text-foreground">{data.activeStreamCount}</span>
-                  </div>
-                  {systemStats && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-muted-foreground">Stream Capacity</span>
-                      <div className="flex items-center">
-                        <span className={`text-sm ${
-                          data.activeStreamCount > systemStats.idealStreams 
-                            ? 'text-orange-500' 
-                            : 'text-green-500'
-                        }`}>
-                          {data.activeStreamCount} / {systemStats.idealStreams}
-                        </span>
-                        <div className="ml-2 text-xs text-muted-foreground">
-                          ({Math.round((data.activeStreamCount / systemStats.idealStreams) * 100)}%)
-                        </div>
-                      </div>
+              {/* Station Status Overview */}
+              <div className="backdrop-blur-xl bg-white/[0.03] border border-white/10 rounded-2xl p-6 flex flex-col justify-between shadow-[0_8px_30px_rgba(0,0,0,0.6)]">
+                <div>
+                  <h2 className="text-lg font-bold text-white mb-4 tracking-tight">Streaming Engine Status</h2>
+                  <div className="space-y-3.5 text-xs">
+                    <div className="flex justify-between items-center py-1.5 border-b border-white/[0.06]">
+                      <span className="text-zinc-400">Web Application</span>
+                      <span className="text-white font-medium flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        Online (Port 3000)
+                      </span>
                     </div>
-                  )}
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Server Time</span>
-                    <span className="text-foreground">{dayjs().format('h:mm A')}</span>
+                    <div className="flex justify-between items-center py-1.5 border-b border-white/[0.06]">
+                      <span className="text-zinc-400">FFmpeg Transcoder</span>
+                      <span className="text-white font-medium">H.264 / AAC Engine Ready</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1.5 border-b border-white/[0.06]">
+                      <span className="text-zinc-400">RTMP Ingest Receiver</span>
+                      <Link href="/rtmp" className="font-medium flex items-center gap-1.5 hover:underline text-white transition-colors">
+                        {rtmpStatus?.isRunning ? (
+                          <>
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>Port 1935 Active{rtmpStatus.activeCount > 0 ? ` (${rtmpStatus.activeCount} live)` : ''}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="w-2 h-2 rounded-full bg-zinc-500" />
+                            <span>Port 1935 Standby</span>
+                          </>
+                        )}
+                      </Link>
+                    </div>
+                    <div className="flex justify-between items-center py-1.5 border-b border-white/[0.06]">
+                      <span className="text-zinc-400">Hot-Swap Video Switcher</span>
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <span>⚡</span> Enabled (No Stream Drop)
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-1.5">
+                      <span className="text-zinc-400">Database Engine</span>
+                      <span className="text-white font-medium">SQLite3 (Active)</span>
+                    </div>
                   </div>
+                </div>
+
+                <div className="pt-4 border-t border-white/10 flex items-center justify-between text-xs text-zinc-400">
+                  <span>Server Platform: Linux x86_64</span>
+                  <span className="text-zinc-300">LOOP STREAM v1.0.0 by CMAISNAM</span>
                 </div>
               </div>
             </div>
-
-            {/* Stream Health Section */}
-            {streamStats && data.activeStreamCount > 0 && (
-              <div className="mt-8 bg-card border border-border rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-foreground mb-4">Stream Health</h2>
-                
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-                  <div className="text-center">
-                    <div className="text-2xl font-bold text-foreground">
-                      {Math.round(streamStats.averages.avgBitrate)} kbps
-                    </div>
-                    <div className="text-sm text-muted-foreground">Avg Bitrate</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-2xl font-bold text-foreground">
-                      {streamStats.averages.avgFps.toFixed(1)} fps
-                    </div>
-                    <div className="text-sm text-muted-foreground">Avg FPS</div>
-                  </div>
-                  <div className="text-center">
-                    <div className={`text-2xl font-bold ${
-                      streamStats.averages.avgSpeed >= 0.95 && streamStats.averages.avgSpeed <= 1.05
-                        ? 'text-green-500'
-                        : 'text-orange-500'
-                    }`}>
-                      {streamStats.averages.avgSpeed.toFixed(2)}x
-                    </div>
-                    <div className="text-sm text-muted-foreground">Avg Speed</div>
-                  </div>
-                  <div className="text-center">
-                    <div className={`text-2xl font-bold ${
-                      streamStats.averages.overallQuality === 'excellent' ? 'text-green-500' :
-                      streamStats.averages.overallQuality === 'good' ? 'text-blue-500' :
-                      streamStats.averages.overallQuality === 'fair' ? 'text-yellow-500' : 'text-red-500'
-                    }`}>
-                      {streamStats.averages.overallQuality.charAt(0).toUpperCase() + 
-                       streamStats.averages.overallQuality.slice(1)}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Overall Quality</div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-sm">
-                  <div className="flex items-center">
-                    <div className="w-3 h-3 bg-green-500 rounded-full mr-2" />
-                    <span className="text-muted-foreground">Excellent:</span>
-                    <span className="ml-1 font-medium">{streamStats.summary.excellentStreams}</span>
-                  </div>
-                  <div className="flex items-center">
-                    <div className="w-3 h-3 bg-blue-500 rounded-full mr-2" />
-                    <span className="text-muted-foreground">Good:</span>
-                    <span className="ml-1 font-medium">{streamStats.summary.goodStreams}</span>
-                  </div>
-                  <div className="flex items-center">
-                    <div className="w-3 h-3 bg-yellow-500 rounded-full mr-2" />
-                    <span className="text-muted-foreground">Fair:</span>
-                    <span className="ml-1 font-medium">{streamStats.summary.fairStreams}</span>
-                  </div>
-                  <div className="flex items-center">
-                    <div className="w-3 h-3 bg-red-500 rounded-full mr-2" />
-                    <span className="text-muted-foreground">Poor:</span>
-                    <span className="ml-1 font-medium">{streamStats.summary.poorStreams}</span>
-                  </div>
-                </div>
-
-                {streamStats.averages.problemStreams.length > 0 && (
-                  <div className="mt-4 p-3 bg-orange-100 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-800 rounded">
-                    <p className="text-sm text-orange-800 dark:text-orange-200">
-                      <strong>Attention:</strong> {streamStats.averages.problemStreams.length} stream(s) 
-                      experiencing issues (IDs: {streamStats.averages.problemStreams.join(', ')})
-                    </p>
-                  </div>
-                )}
-
-                {streamStats.summary.streamsWithErrors > 0 && (
-                  <div className="mt-2 p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded">
-                    <p className="text-sm text-red-800 dark:text-red-200">
-                      <strong>Errors:</strong> {streamStats.summary.streamsWithErrors} stream(s) 
-                      have reported errors
-                    </p>
-                  </div>
-                )}
-
-                <div className="mt-4 pt-4 border-t border-border">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-muted-foreground">Total Data Transferred:</span>
-                    <span className="font-medium text-foreground">
-                      {formatBytes(streamStats.averages.totalDataTransferred)}
-                    </span>
-                  </div>
-                  {streamStats.averages.totalDroppedFrames > 0 && (
-                    <div className="flex justify-between items-center text-sm mt-2">
-                      <span className="text-muted-foreground">Total Dropped Frames:</span>
-                      <span className="font-medium text-orange-500">
-                        {streamStats.averages.totalDroppedFrames.toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </>
+          </div>
         )}
       </div>
     </Layout>

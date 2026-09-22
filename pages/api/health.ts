@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       status: 'healthy',
       timestamp: new Date().toISOString(),
       version: '1.0.0',
-      service: 'QC Live'
+      service: 'LOOP STREAM by CMAISNAM'
     });
   } catch (error) {
     res.status(503).json({

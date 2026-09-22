@@ -12,10 +12,11 @@ interface StreamState {
 // Global state that persists during the container lifetime
 const globalStreamState: StreamState = {};
 
-export function setStreamRunning(streamId: number) {
+export function setStreamRunning(streamId: number, originalStartedAt?: string) {
+  const startedAt = originalStartedAt || globalStreamState[streamId]?.startedAt || new Date().toISOString();
   globalStreamState[streamId] = {
     status: 'running',
-    startedAt: new Date().toISOString(),
+    startedAt,
     lastChecked: new Date().toISOString(),
   };
 }

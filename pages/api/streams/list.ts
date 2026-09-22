@@ -12,9 +12,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       SELECT 
         s.*,
         v.original_name as video_name,
-        v.filename as video_filename
+        v.filename as video_filename,
+        fb.original_name as fallback_video_name
       FROM streams s
-      JOIN videos v ON s.video_id = v.id
+      LEFT JOIN videos v ON s.video_id = v.id
+      LEFT JOIN videos fb ON s.fallback_video_id = fb.id
       ORDER BY s.created_at DESC
     `);
 

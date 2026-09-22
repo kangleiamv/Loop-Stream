@@ -3,6 +3,7 @@ import { getDb, logActivity } from './database';
 import { registerStream, unregisterStream } from './stream-manager';
 import { killFFmpegProcess } from './processKiller';
 import { updateStreamStats, clearStreamStats } from './streamStats';
+import { setStreamRunning } from './streamState';
 import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
@@ -16,15 +17,19 @@ interface StreamProcess {
 }
 
 const activeStreams = new Map<number, StreamProcess>();
+// Tracks streams undergoing on-the-fly video switching to prevent exit handlers from marking them stopped
+const switchingStreams = new Set<number>();
 
 export interface StreamOptions {
-  videoPath: string;
+  videoPath?: string;
   rtmpUrl: string;
-  quality: '720p' | '1080p';
+  quality: string;
   loop: boolean;
+  sourceType?: 'video' | 'rtmp_ingest' | 'rtmp_pull';
+  sourceUrl?: string;
 }
 
-const qualityPresets = {
+const qualityPresets: Record<string, { resolution?: string; videoBitrate: string; maxBitrate: string; bufferSize: string }> = {
   '720p': {
     resolution: '1280:720',
     videoBitrate: '2000k',
@@ -37,16 +42,86 @@ const qualityPresets = {
     maxBitrate: '4000k',
     bufferSize: '8000k',
   },
+  'vertical-720p': {
+    resolution: '720:1280',
+    videoBitrate: '2000k',
+    maxBitrate: '2500k',
+    bufferSize: '5000k',
+  },
+  'vertical-1080p': {
+    resolution: '1080:1920',
+    videoBitrate: '3500k',
+    maxBitrate: '4000k',
+    bufferSize: '8000k',
+  },
+  'original': {
+    videoBitrate: '3000k',
+    maxBitrate: '3500k',
+    bufferSize: '7000k',
+  },
 };
 
-export async function startStream(streamId: number, options: StreamOptions): Promise<void> {
-  const preset = qualityPresets[options.quality];
+export async function startStream(
+  streamId: number,
+  options: StreamOptions,
+  preserveStartedAt: boolean = false
+): Promise<void> {
+  const preset = qualityPresets[options.quality] || qualityPresets['720p'];
   
+  // Parse single or multiple RTMP URLs (multi-streaming / simulcasting)
+  const rawUrls = (options.rtmpUrl || '')
+    .split(/[\n,;|]+/)
+    .map(u => u.trim())
+    .filter(Boolean);
+  const rtmpUrls = Array.from(new Set(rawUrls));
+
+  if (rtmpUrls.length === 0) {
+    throw new Error('No valid RTMP destination URL provided');
+  }
+
+  const vfArgs = preset.resolution ? ['-vf', `scale=${preset.resolution}`] : [];
+
+  // If multiple destinations: encode ONCE and branch via tee muxer.
+  // onfail=ignore keeps remaining streams alive if one platform hiccups.
+  const outputArgs = rtmpUrls.length === 1
+    ? ['-f', 'flv', rtmpUrls[0]]
+    : [
+        '-f', 'tee',
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        rtmpUrls.map(url => `[f=flv:onfail=ignore]${url}`).join('|')
+      ];
+
+  const isNetworkInput = options.sourceType === 'rtmp_ingest' ||
+    options.sourceType === 'rtmp_pull' ||
+    (options.sourceUrl && (
+      options.sourceUrl.startsWith('rtmp://') ||
+      options.sourceUrl.startsWith('rtsp://') ||
+      options.sourceUrl.startsWith('http://') ||
+      options.sourceUrl.startsWith('https://')
+    ));
+
+  const inputSource = isNetworkInput
+    ? (options.sourceUrl || options.videoPath || '')
+    : (options.videoPath || '');
+
+  const inputArgs = isNetworkInput
+    ? [
+        '-reconnect', '1',
+        '-reconnect_at_eof', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '2',
+        '-i', inputSource,
+      ]
+    : [
+        '-re',
+        ...(options.loop ? ['-stream_loop', '-1'] : []),
+        '-i', inputSource,
+      ];
+
   // Add a unique metadata comment to help identify this specific FFmpeg process
   const args = [
-    '-re',
-    ...(options.loop ? ['-stream_loop', '-1'] : []),
-    '-i', options.videoPath,
+    ...inputArgs,
     '-metadata', `comment=streamid:${streamId}`,
     '-metadata', `title=Stream ${streamId}`,
     '-c:v', 'libx264',
@@ -55,13 +130,12 @@ export async function startStream(streamId: number, options: StreamOptions): Pro
     '-b:v', preset.videoBitrate,
     '-maxrate', preset.maxBitrate,
     '-bufsize', preset.bufferSize,
-    '-vf', `scale=${preset.resolution}`,
+    ...vfArgs,
     '-r', '30',
     '-c:a', 'aac',
     '-b:a', '128k',
     '-ar', '44100',
-    '-f', 'flv',
-    options.rtmpUrl,
+    ...outputArgs,
   ];
 
   // Try to find ffmpeg in common locations or use system PATH
@@ -99,6 +173,10 @@ export async function startStream(streamId: number, options: StreamOptions): Pro
   const db = await getDb();
 
   ffmpegProcess.on('error', async (error) => {
+    if (switchingStreams.has(streamId)) {
+      console.log(`[SWITCH VIDEO ERROR IGNORED] Stream ${streamId}:`, error.message);
+      return;
+    }
     console.error(`FFmpeg error for stream ${streamId}:`, error);
     await db.run(
       'UPDATE streams SET status = ?, error_message = ?, pid = NULL WHERE id = ?',
@@ -112,6 +190,14 @@ export async function startStream(streamId: number, options: StreamOptions): Pro
   ffmpegProcess.on('exit', async (code, signal) => {
     console.log(`[STREAM EXIT] Stream ${streamId} - Code: ${code}, Signal: ${signal}, Time: ${new Date().toISOString()}`);
     
+    // If stream is currently in hot-swap transition, keep running status in database!
+    if (switchingStreams.has(streamId)) {
+      console.log(`[HOT SWAP EXIT] Stream ${streamId} old process exited during video switch. Keeping live status.`);
+      activeStreams.delete(streamId);
+      unregisterStream(streamId);
+      return;
+    }
+
     // Log more details about the exit
     if (signal) {
       console.log(`[STREAM EXIT SIGNAL] Stream ${streamId} received signal: ${signal}`);
@@ -164,6 +250,9 @@ export async function startStream(streamId: number, options: StreamOptions): Pro
   // Also handle 'close' event as a fallback
   ffmpegProcess.on('close', (code, signal) => {
     console.log(`FFmpeg process for stream ${streamId} closed with code ${code} and signal ${signal}`);
+    if (switchingStreams.has(streamId)) {
+      return;
+    }
     // Ensure it's removed from active streams
     if (activeStreams.has(streamId)) {
       activeStreams.delete(streamId);
@@ -171,11 +260,18 @@ export async function startStream(streamId: number, options: StreamOptions): Pro
     }
   });
 
-  // Update stream status to running
-  await db.run(
-    'UPDATE streams SET status = ?, pid = ?, started_at = CURRENT_TIMESTAMP, error_message = NULL WHERE id = ?',
-    ['running', ffmpegProcess.pid || null, streamId]
-  );
+  // Update stream status to running (preserve started_at if hot-swapping)
+  if (preserveStartedAt) {
+    await db.run(
+      'UPDATE streams SET status = ?, pid = ?, error_message = NULL WHERE id = ?',
+      ['running', ffmpegProcess.pid || null, streamId]
+    );
+  } else {
+    await db.run(
+      'UPDATE streams SET status = ?, pid = ?, started_at = CURRENT_TIMESTAMP, error_message = NULL WHERE id = ?',
+      ['running', ffmpegProcess.pid || null, streamId]
+    );
+  }
 
   // Register stream globally
   registerStream(streamId);
@@ -276,45 +372,36 @@ export async function stopStream(streamId: number, caller?: string): Promise<voi
   
   // Method 4: Kill by RTMP URL pattern (fallback)
   if (!killed && stream?.rtmp_url) {
-    try {
-      // Try to find by RTMP URL
-      const { stdout } = await execAsync(`ps aux | grep ffmpeg | grep "${stream.rtmp_url}" | grep -v grep`);
-      const processes = stdout.trim().split('\n').filter(line => line);
-      
-      console.log(`Found ${processes.length} FFmpeg processes with RTMP URL: ${stream.rtmp_url}`);
-      
-      for (const proc of processes) {
-        const parts = proc.split(/\s+/);
-        const procPid = parts[1];
-        if (procPid) {
-          try {
-            await execAsync(`kill -9 ${procPid}`);
-            killed = true;
-            console.log(`Killed FFmpeg process ${procPid} by RTMP URL match`);
-          } catch (e) {
-            console.log(`Failed to kill PID ${procPid}:`, e);
+    const urls = stream.rtmp_url.split(/[\n,;|]+/).map((u: string) => u.trim()).filter(Boolean);
+    for (const url of urls) {
+      if (killed) break;
+      try {
+        const { stdout } = await execAsync(`ps aux | grep ffmpeg | grep "${url.replace(/"/g, '')}" | grep -v grep`);
+        const processes = stdout.trim().split('\n').filter(line => line);
+        
+        for (const proc of processes) {
+          const parts = proc.split(/\s+/);
+          const procPid = parts[1];
+          if (procPid) {
+            try {
+              await execAsync(`kill -9 ${procPid}`);
+              killed = true;
+            } catch (e) {
+              console.log(`Failed to kill PID ${procPid}:`, e);
+            }
           }
         }
+      } catch (e) {
+        // url search failed
       }
-    } catch (e) {
-      console.log('ps/grep for RTMP URL failed:', e);
     }
     
     // Also try pkill as last resort
     if (!killed) {
       try {
-        // First try by stream ID
         await execAsync(`pkill -9 -f "streamid:${streamId}"`);
         console.log(`Used pkill to stop processes with streamid:${streamId}`);
-      } catch (e) {
-        // Try by RTMP URL
-        try {
-          await execAsync(`pkill -9 -f "${stream.rtmp_url}"`);
-          console.log(`Used pkill to stop processes with RTMP URL: ${stream.rtmp_url}`);
-        } catch (e2) {
-          console.log('pkill attempts failed:', (e as Error).message, (e2 as Error).message);
-        }
-      }
+      } catch (e) {}
     }
   }
   
@@ -347,4 +434,174 @@ export async function stopAllStreams(): Promise<void> {
   
   const db = await getDb();
   await db.run('UPDATE streams SET status = ?, pid = NULL WHERE status = ?', ['stopped', 'running']);
+}
+
+/**
+ * Switch video for a stream without ending the stream.
+ * If stream is running, performs an instantaneous hot swap to the new video source
+ * while preserving the live stream status and elapsed uptime.
+ */
+export async function switchStreamVideo(
+  streamId: number,
+  newVideoId: number
+): Promise<{ success: boolean; videoName: string }> {
+  const db = await getDb();
+
+  // 1. Fetch stream
+  const stream = await db.get('SELECT * FROM streams WHERE id = ?', [streamId]);
+  if (!stream) {
+    throw new Error(`Stream #${streamId} not found`);
+  }
+
+  // 2. Fetch new video
+  const video = await db.get('SELECT * FROM videos WHERE id = ?', [newVideoId]);
+  if (!video) {
+    throw new Error(`Video #${newVideoId} not found`);
+  }
+
+  // Check file exists
+  const absPath = path.isAbsolute(video.file_path)
+    ? video.file_path
+    : path.resolve(process.cwd(), video.file_path);
+
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`Video file does not exist on disk: ${video.file_path}`);
+  }
+
+  // If stream is not currently running, simply update the DB record
+  if (stream.status !== 'running') {
+    await db.run(
+      'UPDATE streams SET video_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [newVideoId, streamId]
+    );
+    await logActivity(
+      'stream_video_updated',
+      `Stream "${stream.name}" video set to "${video.original_name}"`
+    );
+    return { success: true, videoName: video.original_name };
+  }
+
+  console.log(`[HOT SWAP] Seamlessly switching video for active stream ${streamId} to "${video.original_name}" (ID: ${newVideoId})`);
+
+  // Protect from being marked 'stopped' by exit handlers
+  switchingStreams.add(streamId);
+  const originalStartedAt = stream.started_at;
+
+  try {
+    // 1. Terminate old FFmpeg process
+    const activeItem = activeStreams.get(streamId);
+    if (activeItem?.process) {
+      try {
+        activeItem.process.kill('SIGKILL');
+      } catch (e) {
+        console.log(`[HOT SWAP] kill failed for stream ${streamId}:`, e);
+      }
+    }
+
+    const pid = activeItem?.process?.pid || stream.pid;
+    if (pid) {
+      try {
+        await execAsync(`kill -9 ${pid}`);
+      } catch (e) {}
+    }
+    try {
+      await execAsync(`pkill -9 -f "streamid:${streamId}"`);
+    } catch (e) {}
+
+    activeStreams.delete(streamId);
+
+    // 2. Short 150ms pause for socket release
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // 3. Update database record with new video_id
+    await db.run(
+      'UPDATE streams SET video_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [newVideoId, streamId]
+    );
+
+    // 4. Start new stream process with new video while preserving started_at
+    await startStream(
+      streamId,
+      {
+        videoPath: video.file_path,
+        rtmpUrl: stream.rtmp_url,
+        quality: stream.quality || '720p',
+        loop: stream.loop_enabled === 1,
+      },
+      true // preserveStartedAt
+    );
+
+    // Ensure in-memory state is preserved with original start time
+    setStreamRunning(streamId, originalStartedAt);
+
+    await logActivity(
+      'stream_video_switched',
+      `Hot-swapped live video on stream "${stream.name}" to "${video.original_name}" without ending stream`
+    );
+
+    return { success: true, videoName: video.original_name };
+  } finally {
+    switchingStreams.delete(streamId);
+  }
+}
+
+/**
+ * Hot-swap a running stream from video loop to an incoming live RTMP feed without ending the broadcast.
+ */
+export async function switchStreamToRtmp(
+  streamId: number,
+  rtmpSourceUrl: string
+): Promise<{ success: boolean; sourceUrl: string }> {
+  const db = await getDb();
+  const stream = await db.get('SELECT * FROM streams WHERE id = ?', [streamId]);
+  if (!stream) {
+    throw new Error(`Stream #${streamId} not found`);
+  }
+
+  switchingStreams.add(streamId);
+  const originalStartedAt = stream.started_at;
+
+  try {
+    const activeItem = activeStreams.get(streamId);
+    if (activeItem?.process) {
+      try {
+        activeItem.process.kill('SIGKILL');
+      } catch (e) {}
+    }
+    const pid = activeItem?.process?.pid || stream.pid;
+    if (pid) {
+      try {
+        await execAsync(`kill -9 ${pid}`);
+      } catch (e) {}
+    }
+    try {
+      await execAsync(`pkill -9 -f "streamid:${streamId}"`);
+    } catch (e) {}
+
+    activeStreams.delete(streamId);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    await startStream(
+      streamId,
+      {
+        sourceType: 'rtmp_ingest',
+        sourceUrl: rtmpSourceUrl,
+        rtmpUrl: stream.rtmp_url,
+        quality: stream.quality || '720p',
+        loop: false,
+      },
+      true // preserveStartedAt
+    );
+
+    setStreamRunning(streamId, originalStartedAt);
+
+    await logActivity(
+      'stream_switched_to_rtmp',
+      `Hot-swapped stream "${stream.name}" to live incoming RTMP feed without dropping broadcast`
+    );
+
+    return { success: true, sourceUrl: rtmpSourceUrl };
+  } finally {
+    switchingStreams.delete(streamId);
+  }
 }

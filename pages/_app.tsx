@@ -7,9 +7,9 @@ export default function App({ Component, pageProps }: AppProps) {
   return (
     <>
       <Head>
-        <title>QC Live - Professional Streaming Application</title>
-        <meta name="description" content="QC Live - Professional 24/7 streaming application designed by Himanshu-HIVEcorp" />
-        <meta name="author" content="Himanshu-HIVEcorp" />
+        <title>LOOP STREAM by CMAISNAM - Professional 24/7 Streaming Platform</title>
+        <meta name="description" content="LOOP STREAM by CMAISNAM - Professional 24/7 continuous streaming application" />
+        <meta name="author" content="CMAISNAM" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
       <Component {...pageProps} />

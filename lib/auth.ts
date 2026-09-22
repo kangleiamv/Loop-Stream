@@ -11,11 +11,23 @@ export interface SessionData {
   };
 }
 
+function isSecureConnection(req?: NextApiRequest | GetServerSidePropsContext['req']): boolean {
+  if (process.env.COOKIE_SECURE === 'true') return true;
+  if (process.env.COOKIE_SECURE === 'false') return false;
+  if (req) {
+    const proto = req.headers['x-forwarded-proto'];
+    if (proto === 'https') return true;
+    if ((req as any).socket?.encrypted) return true;
+  }
+  return false;
+}
+
 export const sessionOptions: SessionOptions = {
   password: config.session.secret,
   cookieName: 'streaming-app-session',
   cookieOptions: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.COOKIE_SECURE === 'true',
+    sameSite: 'lax',
   },
 };
 
@@ -23,7 +35,15 @@ export async function getSession(
   req: NextApiRequest | GetServerSidePropsContext['req'],
   res: NextApiResponse | GetServerSidePropsContext['res']
 ): Promise<IronSession<SessionData>> {
-  return getIronSession<SessionData>(req, res, sessionOptions);
+  const isSecure = isSecureConnection(req);
+  return getIronSession<SessionData>(req, res, {
+    ...sessionOptions,
+    cookieOptions: {
+      ...sessionOptions.cookieOptions,
+      secure: isSecure,
+      sameSite: 'lax',
+    },
+  });
 }
 
 export function withSessionRoute(

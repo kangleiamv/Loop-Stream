@@ -63,6 +63,23 @@ export async function getDb() {
     // Column already exists, ignore error
   }
 
+  // Add RTMP Ingest & Receiver columns
+  try {
+    await db.run(`ALTER TABLE streams ADD COLUMN source_type TEXT DEFAULT 'video'`);
+  } catch (e) {}
+
+  try {
+    await db.run(`ALTER TABLE streams ADD COLUMN source_url TEXT`);
+  } catch (e) {}
+
+  try {
+    await db.run(`ALTER TABLE streams ADD COLUMN fallback_video_id INTEGER`);
+  } catch (e) {}
+
+  try {
+    await db.run(`ALTER TABLE streams ADD COLUMN auto_start BOOLEAN DEFAULT 1`);
+  } catch (e) {}
+
   return db;
 }
 
