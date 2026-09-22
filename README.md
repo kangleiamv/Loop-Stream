@@ -115,7 +115,7 @@ flowchart TD
 
 ```bash
 git clone https://github.com/CMAISNAM/loopstream.git
-cd loopstream/QC-Live
+cd loopstream
 ```
 
 ### 2. Install System Dependencies (Ubuntu / Debian)
