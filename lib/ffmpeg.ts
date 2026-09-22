@@ -6,6 +6,7 @@ import { updateStreamStats, clearStreamStats } from './streamStats';
 import { setStreamRunning } from './streamState';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
@@ -79,7 +80,7 @@ export async function startStream(
     throw new Error('No valid RTMP destination URL provided');
   }
 
-  const vfArgs = preset.resolution ? ['-vf', `scale=${preset.resolution}`] : [];
+  const vfArgs = preset.resolution ? ['-vf', `scale=${preset.resolution}:flags=fast_bilinear`] : [];
 
   // If multiple destinations: encode ONCE and branch via tee muxer.
   // onfail=ignore keeps remaining streams alive if one platform hiccups.
@@ -119,14 +120,19 @@ export async function startStream(
         '-i', inputSource,
       ];
 
+  // Optimize threads based on available CPU cores to prevent thread competition
+  const cpuCount = os.cpus().length || 1;
+  const threadArgs = cpuCount <= 2 ? ['-threads', '1'] : ['-threads', String(Math.min(cpuCount, 4))];
+
   // Add a unique metadata comment to help identify this specific FFmpeg process
   const args = [
     ...inputArgs,
     '-metadata', `comment=streamid:${streamId}`,
     '-metadata', `title=Stream ${streamId}`,
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
+    '-preset', 'ultrafast',
     '-tune', 'zerolatency',
+    ...threadArgs,
     '-b:v', preset.videoBitrate,
     '-maxrate', preset.maxBitrate,
     '-bufsize', preset.bufferSize,

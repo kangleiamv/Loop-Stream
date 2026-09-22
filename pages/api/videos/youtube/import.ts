@@ -68,8 +68,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn('Could not pre-fetch info, continuing to download:', infoErr);
       }
 
-      // 2. Download highest quality up to 1080p in MP4 container
-      const downloadCmd = `${baseCmd} -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best" --merge-output-format mp4 -o "${outputPath}" "${sanitizedUrl}"`;
+      // 2. Download highest quality up to 1080p in MP4 container (prefer H.264/AVC1 to minimize CPU during playback)
+      const downloadCmd = `${baseCmd} -f "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1080][vcodec^=avc]+bestaudio/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best" --merge-output-format mp4 -o "${outputPath}" "${sanitizedUrl}"`;
       
       console.log(`[YOUTUBE IMPORT] Downloading "${videoTitle}" from ${url}...`);
       await execAsync(downloadCmd, { timeout: 300000 }); // 5 minutes max
